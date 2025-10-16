@@ -3,7 +3,7 @@
 # Ejecuta: python main.py
 from __future__ import annotations
 import sqlite3
-from database import sha256, DB_FILE
+from database import _hash_password, DB_FILE
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -27,7 +27,7 @@ class LoginDialog(QDialog):
         self.btn_cancel = QPushButton("Cancelar")
 
         form = QFormLayout()
-        form.addRow("Usuario:", self.user)
+        form.addRow("Correo:", self.user)
         form.addRow("Contraseña:", self.passw)
 
         btns = QHBoxLayout()
@@ -45,15 +45,15 @@ class LoginDialog(QDialog):
         u = self.user.text().strip()
         p = self.passw.text()
         if not u or not p:
-            QMessageBox.warning(self, "Faltan datos", "Escribe usuario y contraseña.")
+            QMessageBox.warning(self, "Faltan datos", "Escribe correo y contraseña.")
             return
 
         # Validación directa a SQLite para no depender de QSql*
         conn = sqlite3.connect(DB_FILE)
         cur = conn.cursor()
         cur.execute(
-            "SELECT usuario_id FROM usuarios WHERE usuario=? AND password_hash=?",
-            (u, sha256(p)),
+            "SELECT usuario_id FROM usuarios WHERE correo=? AND password_hash=?",
+            (u, _hash_password(p)),
         )
         row = cur.fetchone()
         conn.close()
@@ -62,5 +62,5 @@ class LoginDialog(QDialog):
             self.accept()
         else:
             QMessageBox.critical(
-                self, "Acceso denegado", "Usuario o contraseña incorrectos."
+                self, "Acceso denegado", "correo o contraseña incorrectos."
         )

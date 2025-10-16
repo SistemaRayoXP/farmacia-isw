@@ -1,20 +1,87 @@
 from __future__ import annotations
-from PySide6.QtCore import Qt, QDate, Signal, QRegularExpression
-from PySide6.QtGui import (
-    QRegularExpressionValidator,
-    QIntValidator, QDoubleValidator
-)
+from PySide6.QtCore import Qt, QDate, Signal, QRegularExpression, QRect, QEvent
+from PySide6.QtGui import QRegularExpressionValidator, QIntValidator, QDoubleValidator
 from PySide6.QtSql import QSqlTableModel
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QTableView, QVBoxLayout, QStyledItemDelegate, QDateEdit
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTableView,
+    QVBoxLayout,
+    QStyledItemDelegate,
+    QDateEdit,
+    QStyleOptionButton,
+    QApplication,
+    QStyle,
 )
-from database import sha256  # usaremos tu util
+from database import _hash_password
 
 # ---------------- Delegates ----------------
 
+
+class BoolDelegate(QStyledItemDelegate):
+    def createEditor(self, parent, option, index):
+        # Sin editor: usaremos click para alternar
+        return None
+
+    def paint(self, painter, option, index):
+        # Lee el valor como 0/1 o True/False
+        value = index.model().data(index, Qt.EditRole)
+        is_checked = bool(value)
+
+        # Prepara las opciones del checkbox
+        opt = QStyleOptionButton()
+        opt.state |= QStyle.State_Enabled
+        opt.state |= QStyle.State_On if is_checked else QStyle.State_Off
+
+        # Centra el checkbox en la celda
+        opt.rect = self._checkbox_rect(option)
+
+        # Dibuja
+        QApplication.style().drawControl(QStyle.CE_CheckBox, opt, painter)
+
+    def editorEvent(self, event, model, option, index):
+        # Solo si es editable
+        if not (index.flags() & Qt.ItemIsEditable):
+            return False
+
+        et = event.type()
+        # Permite click y barra espaciadora/enter
+        is_mouse = et in (QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick)
+        is_key = et == QEvent.KeyPress and event.key() in (
+            Qt.Key_Space,
+            Qt.Key_Return,
+            Qt.Key_Enter,
+        )
+
+        if not (is_mouse or is_key):
+            return False
+
+        # Si fue doble click, evita que el doble click pase a otras cosas
+        if et == QEvent.MouseButtonDblClick:
+            return True
+
+        # Alterna 0/1
+        current = bool(model.data(index, Qt.EditRole))
+        return model.setData(index, 0 if current else 1, Qt.EditRole)
+
+    def _checkbox_rect(self, option):
+        # Calcula el rectángulo del indicador nativo del checkbox
+        opt = QStyleOptionButton()
+        indicator = QApplication.style().subElementRect(
+            QStyle.SE_CheckBoxIndicator, opt, None
+        )
+        x = option.rect.x() + (option.rect.width() - indicator.width()) // 2
+        y = option.rect.y() + (option.rect.height() - indicator.height()) // 2
+        return QRect(x, y, indicator.width(), indicator.height())
+
+
 class PasswordDelegate(QStyledItemDelegate):
     """Muestra **** y, al editar, toma texto plano y guarda sha256 en el modelo."""
+
     def createEditor(self, parent, option, index):
         edit = QLineEdit(parent)
         edit.setEchoMode(QLineEdit.Password)
@@ -29,7 +96,7 @@ class PasswordDelegate(QStyledItemDelegate):
         if not pwd:
             # Si el usuario no escribió nada, no tocamos el hash existente
             return
-        model.setData(index, sha256(pwd))
+        model.setData(index, _hash_password(pwd))
 
     def displayText(self, value, locale):
         # En modo display siempre se ve **** si hay algo, o vacío si no hay hash
@@ -43,8 +110,9 @@ class SmartDelegate(QStyledItemDelegate):
     - Crea editores específicos por tipo de columna (fechas, enteros, reales, texto).
     - Valida antes de escribir en el modelo.
     """
-    editingStarted = Signal(object)          # QModelIndex
-    editingFinished = Signal(object, bool)   # QModelIndex, accepted
+
+    editingStarted = Signal(object)  # QModelIndex
+    editingFinished = Signal(object, bool)  # QModelIndex, accepted
 
     def __init__(self, parent=None, table_name: str = "", header_lookup=None):
         super().__init__(parent)
@@ -60,12 +128,14 @@ class SmartDelegate(QStyledItemDelegate):
         return "fecha" in colname.lower()
 
     def _is_fk_or_id(self, colname: str) -> bool:
-        # id, idCliente, idUsuario, idVehiculo, etc.
+        # id, cliente_id, idUsuario, idVehiculo, etc.
         cn = colname.lower()
         return cn == "id" or cn.startswith("id")
 
     def _is_int_nonneg(self, colname: str) -> bool:
-        return colname in {"stock", "numero_piezas", "cantidad"} or self._is_fk_or_id(colname)
+        return colname in {"stock", "numero_piezas", "cantidad"} or self._is_fk_or_id(
+            colname
+        )
 
     def _is_real_nonneg(self, colname: str) -> bool:
         return colname == "precio"
@@ -74,7 +144,7 @@ class SmartDelegate(QStyledItemDelegate):
         return colname.lower() in {"email", "correo"}
 
     def _needs_name_validator(self, colname: str) -> bool:
-        return colname.lower() in {"nombre", "apellido", "apellidos", "marca", "modelo"}
+        return colname.lower() in {"nombre", "marca", "modelo"}
 
     # -------- fábrica de editores --------
     def createEditor(self, parent, option, index):
@@ -124,7 +194,9 @@ class SmartDelegate(QStyledItemDelegate):
             return
 
         # Para QLineEdit: carga texto sin None
-        editor.setText("" if index.data(Qt.EditRole) is None else str(index.data(Qt.EditRole)))
+        editor.setText(
+            "" if index.data(Qt.EditRole) is None else str(index.data(Qt.EditRole))
+        )
 
     def setModelData(self, editor, model, index):
         colname = self._colname(index)
@@ -133,7 +205,11 @@ class SmartDelegate(QStyledItemDelegate):
         if isinstance(editor, QDateEdit):
             date = editor.date()
             if not date.isValid() or date > QDate.currentDate().addDays(1):
-                QMessageBox.warning(editor, "Fecha inválida", "Introduce una fecha válida que no sea futura.")
+                QMessageBox.warning(
+                    editor,
+                    "Fecha inválida",
+                    "Introduce una fecha válida que no sea futura.",
+                )
                 self.editingFinished.emit(index, False)
                 return
 
@@ -142,6 +218,7 @@ class SmartDelegate(QStyledItemDelegate):
                 # revisa la otra fecha si existe
                 row = index.row()
                 model_rec = model.record(row)
+
                 def get_date_str(fname: str):
                     fidx = model_rec.indexOf(fname)
                     if fidx == -1:
@@ -151,15 +228,23 @@ class SmartDelegate(QStyledItemDelegate):
                 if colname == "fechaEntrada":
                     salida = QDate.fromString(get_date_str("fechaSalida"), "yyyy-MM-dd")
                     if salida.isValid() and date > salida:
-                        QMessageBox.warning(editor, "Rango de fechas",
-                                            "fechaEntrada no puede ser posterior a fechaSalida.")
+                        QMessageBox.warning(
+                            editor,
+                            "Rango de fechas",
+                            "fechaEntrada no puede ser posterior a fechaSalida.",
+                        )
                         self.editingFinished.emit(index, False)
                         return
                 elif colname == "fechaSalida":
-                    entrada = QDate.fromString(get_date_str("fechaEntrada"), "yyyy-MM-dd")
+                    entrada = QDate.fromString(
+                        get_date_str("fechaEntrada"), "yyyy-MM-dd"
+                    )
                     if entrada.isValid() and date < entrada:
-                        QMessageBox.warning(editor, "Rango de fechas",
-                                            "fechaSalida no puede ser anterior a fechaEntrada.")
+                        QMessageBox.warning(
+                            editor,
+                            "Rango de fechas",
+                            "fechaSalida no puede ser anterior a fechaEntrada.",
+                        )
                         self.editingFinished.emit(index, False)
                         return
 
@@ -172,15 +257,23 @@ class SmartDelegate(QStyledItemDelegate):
             if editor.validator():
                 # Qt valida en tiempo real, pero verificamos por si acaso
                 state = editor.validator().validate(editor.text(), 0)[0]
-                if state != QRegularExpressionValidator.Acceptable and not isinstance(editor.validator(), QIntValidator) and not isinstance(editor.validator(), QDoubleValidator):
-                    QMessageBox.warning(editor, "Valor inválido", "Corrige el campo antes de guardar.")
+                if (
+                    state != QRegularExpressionValidator.Acceptable
+                    and not isinstance(editor.validator(), QIntValidator)
+                    and not isinstance(editor.validator(), QDoubleValidator)
+                ):
+                    QMessageBox.warning(
+                        editor, "Valor inválido", "Corrige el campo antes de guardar."
+                    )
                     self.editingFinished.emit(index, False)
                     return
             # Para int/real, si está vacío y es requerido, bloquea
             if self._is_int_nonneg(colname) or self._is_real_nonneg(colname):
                 txt = editor.text().strip()
                 if txt == "":
-                    QMessageBox.warning(editor, "Campo requerido", f"{colname} no puede estar vacío.")
+                    QMessageBox.warning(
+                        editor, "Campo requerido", f"{colname} no puede estar vacío."
+                    )
                     self.editingFinished.emit(index, False)
                     return
 
@@ -195,8 +288,15 @@ class SmartDelegate(QStyledItemDelegate):
 
 # ---------------- Dialog ----------------
 
+
 class CrudDialog(QDialog):
-    def __init__(self, table: str, title: str, editable_columns: list[str] | None = None, parent=None):
+    def __init__(
+        self,
+        table: str,
+        title: str,
+        editable_columns: list[str] | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(800, 480)
@@ -214,9 +314,7 @@ class CrudDialog(QDialog):
 
         # Delegate genérico para todo
         smart = SmartDelegate(
-            self.view,
-            table_name=self.table,
-            header_lookup=self._column_name_by_index
+            self.view, table_name=self.table, header_lookup=self._column_name_by_index
         )
         self.view.setItemDelegate(smart)
 
@@ -224,8 +322,13 @@ class CrudDialog(QDialog):
         smart.editingStarted.connect(self._on_edit_start)
         smart.editingFinished.connect(self._on_edit_finish)
 
+        if table == "Articulos":
+            col = self._column_index("en_promocion")
+            if col != -1:
+                self.view.setItemDelegateForColumn(col, BoolDelegate(self.view))
+
         # Delegate específico para password_hash si aplica
-        if table == "usuarios":
+        if table == "Usuarios":
             idx = self._column_index("password_hash")
             if idx != -1:
                 self.view.setItemDelegateForColumn(idx, PasswordDelegate(self))
@@ -236,7 +339,9 @@ class CrudDialog(QDialog):
 
         # Filtro rápido
         self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText("Filtrar (SQL LIKE sobre todas las columnas visibles)...")
+        self.filter_edit.setPlaceholderText(
+            "Filtrar (SQL LIKE sobre todas las columnas visibles)..."
+        )
         self.filter_edit.textChanged.connect(self.apply_filter)
 
         # Botones
@@ -320,7 +425,7 @@ class CrudDialog(QDialog):
             if self.view.isColumnHidden(i):
                 continue
             col = rec.fieldName(i)
-            likes.append(f'CAST("{col}" AS TEXT) LIKE \'%{esc}%\'')
+            likes.append(f"CAST(\"{col}\" AS TEXT) LIKE '%{esc}%'")
         self.model.setFilter(" OR ".join(likes))
         self.model.select()
 

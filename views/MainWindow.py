@@ -1,6 +1,6 @@
 from __future__ import annotations
 from views.CrudDialog import CrudDialog
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QLabel,
@@ -9,79 +9,53 @@ from PySide6.QtWidgets import (
     QToolBar,
 )
 
-# ---------- Ventana Principal ----------
-# Antes: la renombraste a CrudDialog por error. Esto vuelve a ser MainWindow (QMainWindow).
 class MainWindow(QMainWindow):
     logout_requested = Signal()
 
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Farmacia de especialidades CUCEI")
-        self.resize(1000, 650)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Farmacia - Mini POS")
+        self.resize(400, 300)
+        self._build_menus()
 
-        # Centro con imagen genérica / texto
-        lbl = QLabel(
-            "Gestor de la farmacia\n\nUsa el menú para gestionar las ventas, compras, artículos y demás."
-        )
-        lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("font-size: 20px;")
-        self.setCentralWidget(lbl)
+        tb = QToolBar("Acciones", self)
+        self.addToolBar(tb)
+        tb.addAction("Clientes", lambda: self.open_crud("Clientes", "Clientes"))
+        tb.addAction("Ventas",   lambda: self.open_crud("Ventas", "Ventas"))
+        tb.addAction("Artículos",lambda: self.open_crud("Articulos", "Artículos"))
 
-        # Menú Archivo
-        m_file = self.menuBar().addMenu("&Archivo")
-        act_logout = QAction("Cerrar sesión", self)
-        act_exit = QAction("Salir", self)
-        m_file.addAction(act_logout)
-        m_file.addSeparator()
-        m_file.addAction(act_exit)
+        self.setCentralWidget(QLabel("Listo. Usa el menú para abrir un CRUD.",alignment=Qt.AlignmentFlag.AlignCenter))
 
-        act_logout.triggered.connect(self.request_logout)
-        act_exit.triggered.connect(self.close)
+    def _build_menus(self):
+        m_cat = self.menuBar().addMenu("&Catálogo")
+        self.add_catalog_action(m_cat, "Artículos", "Articulos")
+        self.add_catalog_action(m_cat, "Almacén", "Almacen")
+        self.add_catalog_action(m_cat, "Clientes", "Clientes")
 
-        # Menú Catálogos
-        m_cat = self.menuBar().addMenu("&Catálogos")
-        self.add_catalog_action(m_cat, "Usuarios", "usuarios")
-        self.add_catalog_action(m_cat, "Clientes", "clientes")
-        self.add_catalog_action(m_cat, "Vehículos", "vehiculos")
-        self.add_catalog_action(m_cat, "Piezas", "piezas")
+        m_mov = self.menuBar().addMenu("&Movimientos")
+        self.add_catalog_action(m_mov, "Compras", "Compras")
+        self.add_catalog_action(m_mov, "Detalle de compras", "Detalle_Compra")
+        self.add_catalog_action(m_mov, "Ventas", "Ventas")
+        self.add_catalog_action(m_mov, "Detalle de ventas", "Detalle_Venta")
 
-        # Menú Operación
-        m_op = self.menuBar().addMenu("&Operación")
-        self.add_catalog_action(m_op, "Reparaciones", "reparaciones")
+        m_seg = self.menuBar().addMenu("&Seguridad")
+        self.add_catalog_action(m_seg, "Usuarios", "Usuarios")
 
-        # Menú Ayuda
         m_help = self.menuBar().addMenu("Ay&uda")
         about = QAction("Acerca de…", self)
+        about.triggered.connect(lambda: QMessageBox.information(self, "Farmacia", "Mini farmacia con puntos y promos."))
         m_help.addAction(about)
-        about.triggered.connect(
-            lambda: QMessageBox.information(
-                self,
-                "Acerca de",
-                "Demo de IU en Qt para Farmacia.\nLogin + Menús + CRUD con QSqlTableModel.",
-            )
-        )
 
-        # Barra de herramientas opcional
-        tb = QToolBar("Accesos")
-        self.addToolBar(tb)
-        tb.addAction(act_logout)
-
-    def add_catalog_action(self, menu, label, table):
-        act = QAction(label, self)
+    def add_catalog_action(self, menu, text, table):
+        act = QAction(text, self)
+        act.triggered.connect(lambda: self.open_crud(table, text))
         menu.addAction(act)
-        act.triggered.connect(lambda: self.open_crud(table, label))
 
     def open_crud(self, table: str, label: str):
         dlg = CrudDialog(table, f"{label} - CRUD", parent=self)
         dlg.exec()
 
     def request_logout(self):
-        # Confirmación escueta
-        if (
-            QMessageBox.question(
-                self, "Cerrar sesión", "¿Volver a la pantalla de login?"
-            )
-            == QMessageBox.Yes
-        ):
+        if QMessageBox.question(self, "Cerrar sesión", "¿Volver a la pantalla de login?") == QMessageBox.Yes:
             self.logout_requested.emit()
             self.close()
